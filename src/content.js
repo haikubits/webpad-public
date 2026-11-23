@@ -177,6 +177,7 @@
   let activeId = null;
   const drafts = new Map();
   let busy = false;
+  let managementDone = Promise.resolve();
   let failedOperation = null;
   let tabsSignature = '';
   let copyReset;
@@ -369,8 +370,13 @@
     }
   }
 
-  async function manageNote(type, fields = {}) {
-    if (busy) return;
+  function manageNote(type, fields = {}) {
+    if (busy) return managementDone;
+    managementDone = performNoteAction(type, fields);
+    return managementDone;
+  }
+
+  async function performNoteAction(type, fields) {
     busy = true;
     failedOperation = null;
     refreshEditor();
@@ -603,9 +609,34 @@
     receiveNotebook(changes.webpadNotebook.newValue);
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
-    if (sender.id !== chrome.runtime.id || message?.type !== 'webpad:toggle') return;
-    changeView(view === 'open' ? 'minimized' : 'open');
-    respond({ ok: true });
+    if (sender.id !== chrome.runtime.id) return;
+    if (message?.type === 'webpad:toggle') {
+      changeView(view === 'open' ? 'minimized' : 'open');
+      respond({ ok: true });
+    } else if (message?.type === 'webpad:open-note') {
+      openCapturedNote(message).then(
+        () => respond({ ok: true }),
+        error => {
+          console.error('Webpad could not open the captured note.', error);
+          respond({ ok: false, error: error.message });
+        }
+      );
+      return true;
+    }
   });
-  void load();
+
+  async function openCapturedNote(message) {
+    await ready;
+    while (busy) await managementDone;
+    if (!loaded) throw new Error('The saved notes could not be loaded.');
+    receiveNotebook(message.notebook);
+    if (!notebook.notes.some(entry => entry.id === message.noteId)) {
+      throw new Error('The captured note is no longer available.');
+    }
+    setPreview(false, false);
+    selectNote(message.noteId);
+    changeView('open');
+  }
+
+  const ready = load();
 })();

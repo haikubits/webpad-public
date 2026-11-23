@@ -1,5 +1,6 @@
 // Serialize note mutations so concurrent pages never overwrite unrelated notes.
 let operations = Promise.resolve();
+const selectionMenuId = 'webpad-new-note-from-selection';
 
 function newNote(notes, text = '') {
   let number = 1;
@@ -33,7 +34,10 @@ async function updateNotebook(message) {
   if (message.type === 'webpad:load') return { notebook };
   let selected = notebook.notes.find(note => note.id === message.noteId);
   if (message.type === 'webpad:create') {
-    selected = newNote(notebook.notes);
+    if (message.text !== undefined && typeof message.text !== 'string') {
+      throw new Error('Invalid note text.');
+    }
+    selected = newNote(notebook.notes, message.text ?? '');
     notebook.notes.push(selected);
   } else {
     if (typeof message.noteId !== 'string' || !message.noteId || message.noteId.length > 100) {
@@ -65,47 +69,109 @@ async function updateNotebook(message) {
     }
   }
   notebook.revision++;
-  await chrome.storage.local.set({ webpadNotebook: notebook });
+  await chrome.storage.local.set({
+    webpadNotebook: notebook,
+    ...(message.type === 'webpad:create' && message.open === true
+      ? { webpadActiveNote: selected.id, webpadView: 'open' } : {})
+  });
   return { notebook, noteId: selected.id };
+}
+
+function queueNotebook(message) {
+  const run = () => updateNotebook(message);
+  operations = operations.then(run, run);
+  return operations;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id ||
       !['webpad:load', 'webpad:create', 'webpad:save', 'webpad:rename', 'webpad:delete'].includes(message?.type)) return;
-  operations = operations.then(async () => {
-    try {
-      respond({ ok: true, ...await updateNotebook(message) });
-    } catch (error) {
+  queueNotebook(message).then(
+    result => respond({ ok: true, ...result }),
+    error => {
       console.error('Webpad could not update notes.', error);
       respond({ ok: false, error: error.message, code: error.code });
     }
-  });
+  );
   return true;
 });
+
+async function sendToNotepad(tabId, message) {
+  const [context] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => Boolean(globalThis.__webpadMounted)
+  });
+  if (!context?.result) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['vendor/markdown-it.min.js', 'markdown.js', 'content.js']
+    });
+  }
+  const result = await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
+  if (!result?.ok) throw new Error(result?.error || 'Webpad did not confirm the action.');
+  await chrome.action.setBadgeText({ tabId, text: '' });
+  await chrome.action.setTitle({ tabId, title: 'Show or hide Webpad' });
+}
+
+async function showTabError(tabId, title) {
+  await chrome.action.setBadgeBackgroundColor({ tabId, color: '#a24935' });
+  await chrome.action.setBadgeText({ tabId, text: '!' });
+  await chrome.action.setTitle({ tabId, title });
+}
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
   try {
-    const [context] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => Boolean(globalThis.__webpadMounted)
-    });
-    if (!context?.result) {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['vendor/markdown-it.min.js', 'markdown.js', 'content.js']
-      });
-    }
-    await chrome.tabs.sendMessage(tab.id, { type: 'webpad:toggle' });
-    await chrome.action.setBadgeText({ tabId: tab.id, text: '' });
-    await chrome.action.setTitle({ tabId: tab.id, title: 'Show or hide Webpad' });
+    await sendToNotepad(tab.id, { type: 'webpad:toggle' });
   } catch (error) {
     console.warn('Webpad is unavailable on this page.', error);
-    await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#a24935' });
-    await chrome.action.setBadgeText({ tabId: tab.id, text: '!' });
-    await chrome.action.setTitle({
-      tabId: tab.id,
-      title: 'Webpad cannot run on this page. Open a regular website. For local files, enable "Allow access to file URLs" in extension settings.'
-    });
+    await showTabError(tab.id, 'Webpad cannot run on this page. Open a regular website. For local files, enable "Allow access to file URLs" in extension settings.');
   }
 });
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    if (chrome.runtime.lastError) {
+      console.error('Webpad could not reset its context menu.', chrome.runtime.lastError.message);
+      return;
+    }
+    chrome.contextMenus.create({
+      id: selectionMenuId,
+      title: 'Send selection to Webpad',
+      contexts: ['selection'],
+      documentUrlPatterns: ['http://*/*', 'https://*/*', 'file://*/*']
+    }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Webpad could not create its context menu.', chrome.runtime.lastError.message);
+      }
+    });
+  });
+});
+
+async function captureSelection(info, tab) {
+  if (info.menuItemId !== selectionMenuId) return;
+  if (!tab?.id) {
+    console.error('Webpad could not capture a selection without a browser tab.');
+    return;
+  }
+  let saved = false;
+  try {
+    if (typeof info.selectionText !== 'string' || !info.selectionText.length) {
+      throw new Error('No selected text was provided.');
+    }
+    const result = await queueNotebook({
+      type: 'webpad:create', text: info.selectionText, open: true
+    });
+    saved = true;
+    await sendToNotepad(tab.id, {
+      type: 'webpad:open-note', noteId: result.noteId, notebook: result.notebook
+    });
+  } catch (error) {
+    console.error(saved ? 'Webpad saved the selection but could not display it.' : 'Webpad could not save the selection.', error);
+    await showTabError(tab.id, saved
+      ? 'Selection saved as a new note. Webpad could not open on this page; open it on a regular website to view the note.'
+      : 'Could not save the selection. Please try again; your existing notes are unchanged.');
+  }
+}
+
+chrome.contextMenus.onClicked.addListener(captureSelection);
