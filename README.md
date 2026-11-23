@@ -11,11 +11,35 @@ No account, server, or build step required.
 - **Floating notepad:** drag the header to move it and resize it from the bottom-right corner. Position and size are remembered.
 - **Multiple notes:** create separate note tabs, rename them, and delete them with confirmation.
 - **Markdown preview:** switch between editable Markdown and a formatted preview with headings, emphasis, lists, links, quotes, code, strikethrough, and tables.
-- **Save selected text:** select text on a website, right-click, and choose **Send selection to Webpad** to create a new note.
+- **Save selected text:** select text on a website, right-click **Send to Webpad**, and append it to the **Current note** or create a **New note**.
 - **Automatic local saving:** saved notes are available across websites, browser tabs, and browser restarts in the same Chrome profile.
 - **One-click copying:** copy the current note's original text, including Markdown syntax.
 - **Stay out of the way:** minimize to a small launcher or close the notepad and reopen it from the toolbar.
 - **Visible save status:** unsaved notes are marked with `*`, with retry and draft-recovery behavior when something goes wrong.
+
+## Screenshots
+
+See Webpad in action: jot down a quick thought beside a webpage, capture selected text, and turn Markdown into a readable preview.
+
+### Take notes without leaving the page
+
+Keep a floating note alongside the website you're reading. The note tabs, editing controls, save status, and **Copy text** button stay together in one compact workspace.
+
+![Webpad floating over a webpage with a note open for editing](screenshots/QuickNoteUsage-OpeningScreen.png)
+
+### Send selected text to your notes
+
+Highlight a passage, right-click, and open **Send to Webpad**. Choose **Current note** to append the selection to your existing note or **New note** to keep it separately.
+
+![Selected webpage text with the Send to Webpad submenu showing Current note and New note](screenshots/QuickNoteUsage-SendToWebpad.png)
+
+### Write Markdown, then preview it
+
+Use headings, lists, and emphasis while drafting. Click **Preview** to see the formatted note, then **Edit** to return to the source. **Copy text** keeps the original Markdown in either mode.
+
+| Markdown editor | Formatted preview |
+| --- | --- |
+| ![Webpad editor with Markdown headings, bullet lists, and emphasis](screenshots/QuickNoteUsage-MarkdownSupport.png) | ![The same Webpad note rendered with headings, bullet lists, and italic text](screenshots/QuickNoteUsage-MarkdownPreview.png) |
 
 ## Install
 
@@ -76,11 +100,11 @@ When upgrading an existing single-note installation, your previous note is autom
 
 1. Highlight text on a webpage.
 2. Right-click the selection.
-3. Choose **Send selection to Webpad**.
+3. Open **Send to Webpad** and choose **Current note** or **New note**.
 
-Webpad saves the text Chrome supplies as a separate new note and opens it in **Edit** mode, even if the notepad was closed. It does not replace your existing notes or unsaved drafts.
+**Current note** appends the text to the note selected on that webpage, including any unsaved draft. **New note** saves it as a separate note without replacing your existing notes or drafts. Both actions open the notepad in **Edit** mode, even if it was closed.
 
-The action appears for text selections on webpages, not in every Chrome menu. If Chrome blocks the floating interface after the selection has been saved, the toolbar shows `!`; hover over it for a message confirming the save. Open Webpad on a supported website to view the new note.
+The submenu appears for text selections on webpages, not in every Chrome menu. If Chrome blocks the floating interface after the selection has been saved, the toolbar shows `!`; hover over it for a message confirming the save. Open Webpad on a supported website to view your notes.
 
 ### Preview Markdown
 
@@ -134,7 +158,7 @@ Webpad does not scan webpage content. The context-menu action only saves the sel
 | `storage` | Save notes and layout preferences locally. |
 | `scripting` and `activeTab` | Open Webpad on demand, including on pages opened before installation. |
 | `clipboardWrite` | Copy note text to the clipboard. |
-| `contextMenus` | Add **Send selection to Webpad** to the selection menu. |
+| `contextMenus` | Add **Send to Webpad** with **Current note** and **New note** options to the selection menu. |
 
 The interface uses a closed shadow root to reduce website-style conflicts. It remains an interface embedded in a webpage, not a secure vault for secrets on untrusted sites.
 
@@ -160,6 +184,7 @@ For local `file://` webpages, enable **Allow access to file URLs** in Webpad's d
 
 ```text
 README.md
+screenshots\             Usage screenshots displayed in this README
 src\
     manifest.json        Extension configuration and permissions
     background.js        Storage operations, toolbar, and context menu
