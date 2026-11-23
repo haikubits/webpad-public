@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Webpad - Floating Notepad",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "A quiet, floating notepad for quick thoughts, draft replies, and anything you want to copy later.",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "scripting", "activeTab", "clipboardWrite", "contextMenus"],

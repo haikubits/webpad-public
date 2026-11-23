@@ -1,6 +1,7 @@
 // Serialize note mutations so concurrent pages never overwrite unrelated notes.
 let operations = Promise.resolve();
 const selectionMenuId = 'webpad-new-note-from-selection';
+const currentNoteMenuId = 'webpad-append-selection';
 
 function newNote(notes, text = '') {
   let number = 1;
@@ -32,7 +33,13 @@ async function readNotebook() {
 async function updateNotebook(message) {
   const notebook = await readNotebook();
   if (message.type === 'webpad:load') return { notebook };
-  let selected = notebook.notes.find(note => note.id === message.noteId);
+  let noteId = message.noteId;
+  if (message.type === 'webpad:append' && noteId === undefined) {
+    const { webpadActiveNote } = await chrome.storage.local.get(['webpadActiveNote']);
+    noteId = notebook.notes.some(note => note.id === webpadActiveNote)
+      ? webpadActiveNote : notebook.notes[0].id;
+  }
+  let selected = notebook.notes.find(note => note.id === noteId);
   if (message.type === 'webpad:create') {
     if (message.text !== undefined && typeof message.text !== 'string') {
       throw new Error('Invalid note text.');
@@ -40,7 +47,7 @@ async function updateNotebook(message) {
     selected = newNote(notebook.notes, message.text ?? '');
     notebook.notes.push(selected);
   } else {
-    if (typeof message.noteId !== 'string' || !message.noteId || message.noteId.length > 100) {
+    if (typeof noteId !== 'string' || !noteId || noteId.length > 100) {
       throw new Error('Invalid note ID.');
     }
     if (!selected) {
@@ -52,26 +59,33 @@ async function updateNotebook(message) {
       if (typeof message.title !== 'string' || !message.title.trim() || message.title.length > 80) {
         throw new Error('A restored note needs a name of 1 to 80 characters.');
       }
-      selected = { id: message.noteId, title: message.title, text: '' };
+      selected = { id: noteId, title: message.title, text: '' };
       notebook.notes.push(selected);
     }
     if (message.type === 'webpad:save') {
       if (typeof message.text !== 'string') throw new Error('Invalid note text.');
       selected.text = message.text;
+    } else if (message.type === 'webpad:append') {
+      if (typeof message.text !== 'string' || !message.text.length ||
+          (message.baseText !== undefined && typeof message.baseText !== 'string')) {
+        throw new Error('Invalid selection text.');
+      }
+      const base = message.baseText ?? selected.text;
+      selected.text = base + (base ? '\n\n' : '') + message.text;
     } else if (message.type === 'webpad:rename') {
       if (typeof message.title !== 'string' || !message.title.trim() || message.title.trim().length > 80) {
         throw new Error('Note names must contain 1 to 80 characters.');
       }
       selected.title = message.title.trim();
     } else if (message.type === 'webpad:delete') {
-      notebook.notes = notebook.notes.filter(note => note.id !== message.noteId);
+      notebook.notes = notebook.notes.filter(note => note.id !== noteId);
       if (!notebook.notes.length) notebook.notes.push(newNote([]));
     }
   }
   notebook.revision++;
   await chrome.storage.local.set({
     webpadNotebook: notebook,
-    ...(message.type === 'webpad:create' && message.open === true
+    ...(['webpad:create', 'webpad:append'].includes(message.type) && message.open === true
       ? { webpadActiveNote: selected.id, webpadView: 'open' } : {})
   });
   return { notebook, noteId: selected.id };
@@ -85,7 +99,7 @@ function queueNotebook(message) {
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id ||
-      !['webpad:load', 'webpad:create', 'webpad:save', 'webpad:rename', 'webpad:delete'].includes(message?.type)) return;
+      !['webpad:load', 'webpad:create', 'webpad:save', 'webpad:append', 'webpad:rename', 'webpad:delete'].includes(message?.type)) return;
   queueNotebook(message).then(
     result => respond({ ok: true, ...result }),
     error => {
@@ -96,7 +110,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 
-async function sendToNotepad(tabId, message) {
+async function ensureNotepad(tabId) {
   const [context] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => Boolean(globalThis.__webpadMounted)
@@ -107,8 +121,20 @@ async function sendToNotepad(tabId, message) {
       files: ['vendor/markdown-it.min.js', 'markdown.js', 'content.js']
     });
   }
+}
+
+async function sendToNotepad(tabId, message) {
+  await ensureNotepad(tabId);
+  await deliverToNotepad(tabId, message);
+}
+
+async function deliverToNotepad(tabId, message) {
   const result = await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
-  if (!result?.ok) throw new Error(result?.error || 'Webpad did not confirm the action.');
+  if (!result?.ok) {
+    const error = new Error(result?.error || 'Webpad did not confirm the action. Check the note before retrying.');
+    error.retained = result?.retained === true;
+    throw error;
+  }
   await chrome.action.setBadgeText({ tabId, text: '' });
   await chrome.action.setTitle({ tabId, title: 'Show or hide Webpad' });
 }
@@ -135,42 +161,74 @@ chrome.runtime.onInstalled.addListener(() => {
       console.error('Webpad could not reset its context menu.', chrome.runtime.lastError.message);
       return;
     }
-    chrome.contextMenus.create({
-      id: selectionMenuId,
-      title: 'Send selection to Webpad',
-      contexts: ['selection'],
-      documentUrlPatterns: ['http://*/*', 'https://*/*', 'file://*/*']
-    }, () => {
-      if (chrome.runtime.lastError) {
-        console.error('Webpad could not create its context menu.', chrome.runtime.lastError.message);
-      }
-    });
+    const parentId = 'webpad-send-selection';
+    for (const item of [
+      { id: parentId, title: 'Send to Webpad' },
+      { id: currentNoteMenuId, parentId, title: 'Current note' },
+      { id: selectionMenuId, parentId, title: 'New note' }
+    ]) {
+      chrome.contextMenus.create({
+        ...item,
+        contexts: ['selection'],
+        documentUrlPatterns: ['http://*/*', 'https://*/*', 'file://*/*']
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Webpad could not create its context menu.', chrome.runtime.lastError.message);
+        }
+      });
+    }
   });
 });
 
 async function captureSelection(info, tab) {
-  if (info.menuItemId !== selectionMenuId) return;
+  if (![selectionMenuId, currentNoteMenuId].includes(info.menuItemId)) return;
   if (!tab?.id) {
     console.error('Webpad could not capture a selection without a browser tab.');
     return;
   }
   let saved = false;
+  let currentNoteRequestSent = false;
+  const append = info.menuItemId === currentNoteMenuId;
   try {
     if (typeof info.selectionText !== 'string' || !info.selectionText.length) {
       throw new Error('No selected text was provided.');
     }
+    if (append) {
+      let available = false;
+      try {
+        await ensureNotepad(tab.id);
+        available = true;
+      } catch (error) {
+        console.warn('Webpad cannot display here; appending to the last selected saved note.', error);
+      }
+      if (available) {
+        currentNoteRequestSent = true;
+        await deliverToNotepad(tab.id, { type: 'webpad:append-selection', text: info.selectionText });
+        return;
+      }
+    }
     const result = await queueNotebook({
-      type: 'webpad:create', text: info.selectionText, open: true
+      type: append ? 'webpad:append' : 'webpad:create', text: info.selectionText, open: true
     });
     saved = true;
+    if (append) {
+      await showTabError(tab.id, 'Selection appended to the last selected note. Webpad cannot open on this page; open it on a regular website to view the note.');
+      return;
+    }
     await sendToNotepad(tab.id, {
       type: 'webpad:open-note', noteId: result.noteId, notebook: result.notebook
     });
   } catch (error) {
     console.error(saved ? 'Webpad saved the selection but could not display it.' : 'Webpad could not save the selection.', error);
-    await showTabError(tab.id, saved
-      ? 'Selection saved as a new note. Webpad could not open on this page; open it on a regular website to view the note.'
-      : 'Could not save the selection. Please try again; your existing notes are unchanged.');
+    let title = 'Could not save the selection. Please try again; your existing notes are unchanged.';
+    if (saved) {
+      title = 'Selection saved as a new note. Webpad could not open on this page; open it on a regular website to view the note.';
+    } else if (error.retained) {
+      title = 'Could not save the selection. Appended text is kept as an unsaved draft in Webpad; use Retry or copy it.';
+    } else if (currentNoteRequestSent) {
+      title = 'Could not confirm the append. Check the current note in Webpad before retrying.';
+    }
+    await showTabError(tab.id, title);
   }
 }
 

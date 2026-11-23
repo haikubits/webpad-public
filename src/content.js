@@ -379,6 +379,13 @@
   async function performNoteAction(type, fields) {
     busy = true;
     failedOperation = null;
+    let appendedDraft;
+    if (type === 'append') {
+      const entry = visibleNotes().find(item => item.id === fields.noteId);
+      const base = drafts.get(fields.noteId)?.text ?? entry.text;
+      appendedDraft = { text: base + (base ? '\n\n' : '') + fields.text, title: entry.title, pending: true, error: null };
+      drafts.set(fields.noteId, appendedDraft);
+    }
     refreshEditor();
     try {
       let result;
@@ -387,6 +394,7 @@
       } else {
         result = await command(type, fields);
         if (type === 'delete') drafts.delete(fields.noteId);
+        if (type === 'append' && drafts.get(fields.noteId) === appendedDraft) drafts.delete(fields.noteId);
         receiveNotebook(result.notebook);
       }
       noteAction.hidden = true;
@@ -395,13 +403,21 @@
         setPreview(false, false);
         void savePreference('webpadActiveNote', activeId);
       }
+      return { ok: true };
     } catch (error) {
       console.error(`Webpad could not ${type} the note.`, error);
-      failedOperation = {
-        message: `Could not ${type} note`,
-        retry: () => { void manageNote(type, fields); }
-      };
+      if (appendedDraft) {
+        appendedDraft.pending = false;
+        appendedDraft.error = error.code === 'NOTE_DELETED'
+          ? 'Deleted elsewhere; retry to restore' : 'Not saved; retry or copy';
+      } else {
+        failedOperation = {
+          message: `Could not ${type} note`,
+          retry: () => { void manageNote(type, fields); }
+        };
+      }
       announcement.textContent = error.message;
+      return { ok: false, error: error.message, retained: Boolean(appendedDraft) };
     } finally {
       busy = false;
       refreshEditor();
@@ -613,9 +629,9 @@
     if (message?.type === 'webpad:toggle') {
       changeView(view === 'open' ? 'minimized' : 'open');
       respond({ ok: true });
-    } else if (message?.type === 'webpad:open-note') {
-      openCapturedNote(message).then(
-        () => respond({ ok: true }),
+    } else if (['webpad:open-note', 'webpad:append-selection'].includes(message?.type)) {
+      handleCapturedSelection(message).then(
+        result => respond(result),
         error => {
           console.error('Webpad could not open the captured note.', error);
           respond({ ok: false, error: error.message });
@@ -625,10 +641,21 @@
     }
   });
 
-  async function openCapturedNote(message) {
+  async function handleCapturedSelection(message) {
     await ready;
     while (busy) await managementDone;
     if (!loaded) throw new Error('The saved notes could not be loaded.');
+    if (message.type === 'webpad:append-selection') {
+      if (typeof message.text !== 'string' || !message.text.length) throw new Error('No selected text was provided.');
+      const draft = drafts.get(activeId);
+      noteAction.hidden = true;
+      setPreview(false, false);
+      changeView('open');
+      return manageNote('append', {
+        noteId: activeId, text: message.text, open: true,
+        ...(draft ? { baseText: draft.text } : {})
+      });
+    }
     receiveNotebook(message.notebook);
     if (!notebook.notes.some(entry => entry.id === message.noteId)) {
       throw new Error('The captured note is no longer available.');
@@ -636,6 +663,7 @@
     setPreview(false, false);
     selectNote(message.noteId);
     changeView('open');
+    return { ok: true };
   }
 
   const ready = load();
