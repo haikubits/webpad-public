@@ -146,6 +146,8 @@ There is no fixed note-count limit, but Chrome's local extension storage quota s
 
 ## Privacy and permissions
 
+Read the full [Webpad Privacy Policy](PRIVACY.md) for data handling, retention, deletion, and contact information.
+
 Notes and layout preferences are stored using **`chrome.storage.local`** in your Chrome profile, not in the website's storage. Webpad does not provide cloud sync or share notes between different devices or Chrome profiles.
 
 There are no accounts, analytics, remote fonts, or network services. The Markdown parser is bundled with the extension; previews do not fetch external content. Following a link in a note opens the destination normally.
@@ -156,7 +158,7 @@ Webpad does not scan webpage content. The context-menu action only saves the sel
 | --- | --- |
 | Access to all sites (`<all_urls>`) | Display the floating interface across webpages. |
 | `storage` | Save notes and layout preferences locally. |
-| `scripting` and `activeTab` | Open Webpad on demand, including on pages opened before installation. |
+| `scripting` | Open Webpad on demand, including on pages opened before installation. |
 | `clipboardWrite` | Copy note text to the clipboard. |
 | `contextMenus` | Add **Send to Webpad** with **Current note** and **New note** options to the selection menu. |
 
@@ -184,6 +186,7 @@ For local `file://` webpages, enable **Allow access to file URLs** in Webpad's d
 
 ```text
 README.md
+PRIVACY.md               Public privacy policy
 screenshots\             Usage screenshots displayed in this README
 src\
     manifest.json        Extension configuration and permissions
